@@ -109,16 +109,15 @@ pub const NotifierSystem = struct {
         return try std.fmt.bufPrintZ(buf, "{} min {} sec", .{ minutes, seconds });
     }
 
-    fn sleepUntil(self: *NotifierSystem, target_time_ms: i64) !void {
-        while (self.running) {
-            const current = std.time.milliTimestamp();
-            if (target_time_ms < current) {
-                return;
-            }
-
-            const remaining = @as(u64, @intCast(target_time_ms - current));
-            try self.condition.timedWait(&self.mutex, remaining * std.time.ns_per_ms);
+    fn sleepUntil(self: *NotifierSystem, target_time_ms: i64) void {
+        const current = std.time.milliTimestamp();
+        if (target_time_ms < current) {
+            return;
         }
+
+        const remaining = @as(u64, @intCast(target_time_ms - current));
+        // std.debug.print("timedwait {}\n", .{remaining*std.time.ns_per_ms});
+        _ = self.condition.timedWait(&self.mutex, remaining * std.time.ns_per_ms) catch {};
     }
 
     fn getAvatarPath(self: *NotifierSystem) ![:0]const u8 {
@@ -277,7 +276,7 @@ pub const NotifierSystem = struct {
                 const sleep_str = formatTime(sleep_ms, &time_buf) catch "unknown";
                 std.debug.print("Sleeping for {s} until next event...\n", .{sleep_str});
 
-                try self.sleepUntil(next_event_time);
+                self.sleepUntil(next_event_time);
             }
         }
     }
@@ -299,12 +298,4 @@ fn handleSignal(_: c_int) callconv(.C) void {
         notifier.running = false;
         notifier.condition.signal();
     }
-}
-
-pub export fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
-
-test "basic add functionality" {
-    try testing.expect(add(3, 7) == 10);
 }
