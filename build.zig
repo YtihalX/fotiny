@@ -57,11 +57,11 @@ pub fn build(b: *std.Build) void {
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
     lib.linkLibC();
-    lib.addIncludePath(.{.cwd_relative = "/usr/include/gdk-pixbuf-2.0"});
+    lib.addIncludePath(.{ .cwd_relative = "/usr/include/gdk-pixbuf-2.0" });
     lib.linkSystemLibrary("notify");
     lib.linkSystemLibrary("glib-2.0");
     lib.linkSystemLibrary("gobject-2.0");
-    b.installArtifact(lib);
+    // b.installArtifact(lib);
 
     // This creates another `std.Build.Step.Compile`, but this one builds an executable
     // rather than a static library.

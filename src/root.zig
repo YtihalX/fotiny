@@ -7,6 +7,7 @@ const c = @cImport({
 });
 const testing = std.testing;
 
+const avatar_data = @embedFile("assets/avatar.png");
 var instance: ?*NotifierSystem = null;
 pub const NotifierSystem = struct {
     allocator: std.mem.Allocator,
@@ -15,6 +16,8 @@ pub const NotifierSystem = struct {
     random: std.Random.DefaultPrng,
     notification1_count: u32 = 0,
     last_break_time: i64,
+    condition: std.Thread.Condition,
+    mutex: std.Thread.Mutex,
 
     const MIN_INTERVAL_MS = 4 * 60 * 1000; // 5 minutes
     const MAX_INTERVAL_MS = 6 * 60 * 1000; // 8 minutes
@@ -28,6 +31,8 @@ pub const NotifierSystem = struct {
             .resting = false,
             .random = std.Random.DefaultPrng.init(@intCast(std.time.timestamp())),
             .last_break_time = std.time.milliTimestamp(),
+            .condition = std.Thread.Condition{},
+            .mutex = std.Thread.Mutex{},
         };
     }
 
@@ -104,7 +109,7 @@ pub const NotifierSystem = struct {
         return try std.fmt.bufPrintZ(buf, "{} min {} sec", .{ minutes, seconds });
     }
 
-    fn sleepUntil(self: *NotifierSystem, target_time_ms: i64) void {
+    fn sleepUntil(self: *NotifierSystem, target_time_ms: i64) !void {
         while (self.running) {
             const current = std.time.milliTimestamp();
             if (target_time_ms < current) {
@@ -112,16 +117,38 @@ pub const NotifierSystem = struct {
             }
 
             const remaining = @as(u64, @intCast(target_time_ms - current));
-            std.Thread.sleep(remaining * std.time.ns_per_ms);
+            try self.condition.timedWait(&self.mutex, remaining * std.time.ns_per_ms);
         }
     }
 
-    pub fn run(self: *NotifierSystem) !void {
-        const cwd = try std.fs.cwd().realpathAlloc(self.allocator, ".");
-        defer self.allocator.free(cwd);
+    fn getAvatarPath(self: *NotifierSystem) ![:0]const u8 {
+        // Get temporary directory
+        const tmp_dir = std.posix.getenv("TMPDIR") orelse "/tmp";
 
+        // Create a path for our temporary avatar file
         var avatar_path_buf: [256]u8 = undefined;
-        const avatar_path = try std.fmt.bufPrintZ(&avatar_path_buf, "{s}/assets/avatar.png", .{cwd});
+        const avatar_path = try std.fmt.bufPrintZ(&avatar_path_buf, "{s}/fotiny-avatar.png", .{tmp_dir});
+
+        // Create the file
+        const file = try std.fs.createFileAbsolute(avatar_path, .{});
+        defer file.close();
+
+        // Write the embedded data to the file
+        _ = try file.writeAll(avatar_data);
+
+        // Return the path (allocated copy that caller will own)
+        return try self.allocator.dupeZ(u8, avatar_path);
+    }
+
+    pub fn run(self: *NotifierSystem) !void {
+        const avatar_path = try getAvatarPath(self);
+        defer self.allocator.free(avatar_path);
+
+        // const cwd = try std.fs.cwd().realpathAlloc(self.allocator, ".");
+        // defer self.allocator.free(cwd);
+        //
+        // var avatar_path_buf: [256]u8 = undefined;
+        // const avatar_path = try std.fmt.bufPrintZ(&avatar_path_buf, "{s}/assets/avatar.png", .{cwd});
 
         // Send start notification
 
@@ -152,7 +179,8 @@ pub const NotifierSystem = struct {
         self.last_break_time = std.time.milliTimestamp();
         var next_notification1_time = std.time.milliTimestamp() + @as(i64, @intCast(self.getRandomInterval()));
 
-        while (self.running) {
+        while (self.running) : (self.mutex.unlock()) {
+            self.mutex.lock();
             const current_time = std.time.milliTimestamp();
             var next_event_time: i64 = std.math.maxInt(i64);
 
@@ -249,7 +277,7 @@ pub const NotifierSystem = struct {
                 const sleep_str = formatTime(sleep_ms, &time_buf) catch "unknown";
                 std.debug.print("Sleeping for {s} until next event...\n", .{sleep_str});
 
-                self.sleepUntil(next_event_time);
+                try self.sleepUntil(next_event_time);
             }
         }
     }
@@ -266,9 +294,13 @@ fn handleSignal(_: c_int) callconv(.C) void {
 
     // 6. Can access global_instance because same module
     if (instance) |notifier| {
+        notifier.mutex.lock();
+        defer notifier.mutex.unlock();
         notifier.running = false;
+        notifier.condition.signal();
     }
 }
+
 pub export fn add(a: i32, b: i32) i32 {
     return a + b;
 }
